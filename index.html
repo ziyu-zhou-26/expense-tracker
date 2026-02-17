@@ -268,6 +268,26 @@
       const CARDS = ['Checking','Venture X','Flex','CSP','Prime','BOA','Venmo','Target','Discover'];
       const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+      // Chase category mapping
+      const CHASE_CATEGORY_MAPPING = {
+        'Groceries': 'Groceries',
+        'Food & drink': 'Food & Drink',
+        'Gas': 'Gas/Auto',
+        'Shopping': 'Shopping',
+        'Travel': 'Travel',
+        'Home': 'Home',
+        'Automotive': 'Gas/Auto',
+        'Bills & utilities': 'Mortgage & Utilities',
+        'Health & wellness': 'Health',
+        'Personal': 'Personal Care & Beauty',
+        'Education': 'Other',
+        'Entertainment': 'Other',
+        'Fees & adjustments': 'Other',
+        'Gifts & donations': 'Other',
+        'Miscellaneous': 'Other',
+        'Professional services': 'Other',
+      };
+
       const showMsg = (m, ms=5000) => { setMsg(m); setTimeout(()=>setMsg(''), ms); };
 
       // Load data
@@ -324,26 +344,11 @@
         return null;
       }, [rules]);
 
-      const catWithAI = async (desc, bankCat) => {
-        try {
-          const r = await fetch("https://api.anthropic.com/v1/messages", {
-            method:"POST", headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:100,
-              messages:[{role:"user",content:`Categorize: "${desc}" (bank: "${bankCat}") into ONE of: ${CATS.join(', ')}. Reply ONLY the category.`}]})
-          });
-          const d=await r.json(); const c=d.content[0].text.trim(); return CATS.includes(c)?c:'Other';
-        } catch { return 'Other'; }
-      };
-
       const extractMerchant = async (desc) => {
-        try {
-          const r = await fetch("https://api.anthropic.com/v1/messages", {
-            method:"POST", headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:50,
-              messages:[{role:"user",content:`Extract merchant name from: "${desc}". Reply ONLY the name. Examples: "TST* KIIN THAI"→"KIIN", "AMAZON.COM*AB3"→"AMAZON"`}]})
-          });
-          const d=await r.json(); return d.content[0].text.trim();
-        } catch { return desc.split(' ')[0]; }
+        // Simple extraction: get first meaningful word (skip common prefixes)
+        const cleaned = desc.replace(/^(TST\*|SQ \*|CTLP\*|PP\*)/i, '').trim();
+        const firstWord = cleaned.split(/[\s\-]/)[0];
+        return firstWord || desc.split(' ')[0];
       };
 
       // CSV parsing
@@ -487,8 +492,16 @@
           const n=normalize(row,bankType,cardName); if (!n) continue;
           const isDupe=transactions.some(t=>t.date===n.date&&t.description===n.description&&Math.abs(t.amount-n.amount)<0.01&&t.card===n.card);
           if (isDupe){dupes++;continue;}
-          let cat=applyRules(n.description);
-          if (!cat) cat=await catWithAI(n.description, n.bankCategory||'');
+          
+          // Categorization priority: 1) Rules, 2) Chase mapping, 3) Default "Other"
+          let cat = applyRules(n.description);
+          if (!cat && n.bankCategory) {
+            cat = CHASE_CATEGORY_MAPPING[n.bankCategory] || null;
+          }
+          if (!cat) {
+            cat = 'Other';
+          }
+          
           n.category=cat; n.needsReview=true; n.flagged=false; n.flagNote='';
           newTx.push(n);
         }
