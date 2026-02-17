@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Expense Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    // Supabase setup
+    const SUPABASE_URL = 'https://emjqwiitxqbrrbreeaiyx.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVtanF3aWl0eHFicmJyZWVhaXl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEyNjMyODMsImV4cCI6MjA4NjgzOTI4M30.dc47AMGUjGu9Focz4IjP81ZSupV_843_XeksXnHzuAg';
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // DB <-> JS helpers
+    const toDb = (t, userId) => ({
+      id: t.id, user_id: userId, date: t.date, description: t.description,
+      amount: t.amount, category: t.category, card: t.card,
+      needs_review: t.needsReview !== undefined ? t.needsReview : true,
+      flagged: t.flagged || false, flag_note: t.flagNote || '',
+      original_amount: t.originalAmount !== undefined ? t.originalAmount : null,
+      bank_category: t.bankCategory || '', source: t.source || 'Unknown',
+      raw_data: t.rawData || null,
+    });
+
+    const fromDb = (r) => ({
+      id: r.id, date: r.date, description: r.description,
+      amount: parseFloat(r.amount), category: r.category, card: r.card,
+      needsReview: r.needs_review, flagged: r.flagged, flagNote: r.flag_note || '',
+      originalAmount: r.original_amount !== null ? parseFloat(r.original_amount) : undefined,
+      bankCategory: r.bank_category || '', source: r.source, rawData: r.raw_data,
+    });
+
+    const parseDate = (d) => {
+      if (!d) return new Date(0);
+      if (d.includes('/')) { const [m,day,y] = d.split('/'); return new Date(y?.length===2?'20'+y:y, m-1, day); }
+      return new Date(d);
+    };
+    const sortByDate = (arr, order='desc') => [...arr].sort((a,b) => order==='desc' ? parseDate(b.date)-parseDate(a.date) : parseDate(a.date)-parseDate(b.date));
+
+    // SVG Icons
+    const UploadIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>;
+    const DownloadIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>;
+    const TrashIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>;
+    const XIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>;
+    const EditIcon = () => <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>;
+    const CheckIcon = ({cls="w-4 h-4"}) => <svg className={cls} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg>;
+    const FlagIcon = ({filled}) => <svg className="w-4 h-4" fill={filled?"currentColor":"none"} viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21V4m0 0l6 3 6-3 6 3v13l-6-3-6 3-6-3z"/></svg>;
+    const LogoutIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>;
+    const BigUploadIcon = () => <svg className="w-12 h-12 text-slate-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>;
+
+    // Login Page
+    const LoginPage = ({ onLogin }) => {
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [isSignUp, setIsSignUp] = useState(false);
+      const [error, setError] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      const submit = async () => {
+        if (!email || !password) { setError('Please enter email and password'); return; }
+        setLoading(true); setError('');
+        try {
+          if (isSignUp) {
+            const { error } = await sb.auth.signUp({ email, password });
+            if (error) throw error;
+            setError('✅ Account created! Please sign in.');
+            setIsSignUp(false);
+          } else {
+            const { data, error } = await sb.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            onLogin(data.user);
+          }
+        } catch(e) { setError(e.message); }
+        finally { setLoading(false); }
+      };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-md">
+            <h1 className="text-3xl font-bold text-slate-900 mb-1">Expense Tracker</h1>
+            <p className="text-slate-600 mb-8">{isSignUp ? 'Create your account' : 'Sign in to continue'}</p>
+            {error && <div className={`p-3 rounded-lg mb-4 text-sm ${error.startsWith('✅') ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{error}</div>}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@email.com"
+                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  onKeyDown={e=>e.key==='Enter'&&submit()} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"
+                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  onKeyDown={e=>e.key==='Enter'&&submit()} />
+              </div>
+              <button onClick={submit} disabled={loading} className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50">
+                {loading ? 'Please wait...' : (isSignUp ? 'Create Account' : 'Sign In')}
+              </button>
+              <button onClick={()=>{setIsSignUp(!isSignUp);setError('');}} className="w-full py-2 text-slate-600 hover:text-slate-900 text-sm">
+                {isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Create one"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Transaction Row
+    const TransactionRow = ({ transaction:t, categories, onUpdateCategory, onUpdateDescription, onUpdateAmount, onDelete, onAccept, onFlag, formatDate, extractMerchant, isSelected, onToggleSelect }) => {
+      const [editCat, setEditCat] = useState(false);
+      const [editDesc, setEditDesc] = useState(false);
+      const [editAmt, setEditAmt] = useState(false);
+      const [selCat, setSelCat] = useState(t.category);
+      const [desc, setDesc] = useState(t.description);
+      const [amt, setAmt] = useState(t.amount);
+      const [showRule, setShowRule] = useState(false);
+      const [merchant, setMerchant] = useState('');
+      const [extracting, setExtracting] = useState(false);
+      const [showFlag, setShowFlag] = useState(false);
+      const [flagNote, setFlagNote] = useState(t.flagNote||'');
+
+      const saveCategory = (asRule) => { onUpdateCategory(t.id, selCat, asRule, merchant); setEditCat(false); setShowRule(false); setMerchant(''); };
+      const showRulePrompt = async () => { setExtracting(true); setShowRule(true); setMerchant(await extractMerchant(t.description)); setExtracting(false); };
+
+      return (
+        <tr className={`hover:bg-slate-50 ${isSelected?'bg-blue-50':t.flagged?'bg-orange-50':t.needsReview?'bg-yellow-50':''}`}>
+          <td className="px-4 py-4 text-center">
+            <input type="checkbox" checked={isSelected} onChange={()=>onToggleSelect(t.id)} className="w-4 h-4 rounded border-slate-300"/>
+          </td>
+          <td className="px-6 py-4 text-sm text-slate-700 whitespace-nowrap">{formatDate(t.date)}</td>
+          <td className="px-6 py-4">
+            {!editDesc ? (
+              <div className="flex items-center gap-2">
+                <div>
+                  <div className="text-sm font-medium text-slate-900">{t.description}</div>
+                  <div className="text-xs text-slate-500">{t.source}</div>
+                </div>
+                <button onClick={()=>{setEditDesc(true);setDesc(t.description);}} className="text-slate-400 hover:text-slate-600"><EditIcon/></button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <input type="text" value={desc} onChange={e=>setDesc(e.target.value)} className="w-full text-sm border border-slate-300 rounded px-2 py-1" autoFocus/>
+                <div className="flex gap-2">
+                  <button onClick={()=>{onUpdateDescription(t.id,desc);setEditDesc(false);}} className="text-xs text-blue-600 hover:text-blue-800">Save</button>
+                  <button onClick={()=>{setEditDesc(false);setDesc(t.description);}} className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                </div>
+              </div>
+            )}
+          </td>
+          <td className="px-6 py-4 text-sm text-slate-600 whitespace-nowrap">{t.card}</td>
+          <td className="px-6 py-4">
+            {!editCat ? (
+              <div className="flex items-center gap-2">
+                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${t.needsReview?'bg-yellow-100 text-yellow-800':'bg-blue-100 text-blue-800'}`}>{t.category}</span>
+                <button onClick={()=>{setEditCat(true);setSelCat(t.category);}} className="text-slate-400 hover:text-slate-600"><EditIcon/></button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <select value={selCat} onChange={e=>setSelCat(e.target.value)} className="text-sm border border-slate-300 rounded px-2 py-1">
+                  {categories.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+                {selCat!==t.category && (
+                  <div className="flex gap-2 flex-wrap">
+                    <button onClick={showRulePrompt} className="text-xs text-blue-600 hover:text-blue-800">Save & create rule</button>
+                    <button onClick={()=>saveCategory(false)} className="text-xs text-slate-600 hover:text-slate-800">Just this once</button>
+                    <button onClick={()=>{setEditCat(false);setSelCat(t.category);setShowRule(false);}} className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                  </div>
+                )}
+                {selCat===t.category && <button onClick={()=>{setEditCat(false);setShowRule(false);}} className="text-xs text-slate-600 hover:text-slate-800">Cancel</button>}
+                {showRule && (
+                  <div className="text-xs bg-blue-50 p-2 rounded">
+                    {extracting ? <p>🤖 Analyzing merchant...</p> : (
+                      <>
+                        <p className="mb-2 font-medium">Create rule: description contains...</p>
+                        <input type="text" value={merchant} onChange={e=>setMerchant(e.target.value)} placeholder="e.g., COOKUNITY, AMAZON"
+                          className="w-full px-2 py-1 text-xs border border-slate-300 rounded mb-2" autoFocus/>
+                        <p className="text-xs text-slate-600 mb-2">→ categorize as <strong>{selCat}</strong></p>
+                        <div className="flex gap-2">
+                          <button onClick={()=>saveCategory(true)} disabled={!merchant.trim()} className="px-2 py-1 bg-blue-600 text-white rounded text-xs disabled:opacity-50">Save rule</button>
+                          <button onClick={()=>{setShowRule(false);setMerchant('');}} className="px-2 py-1 bg-slate-200 rounded text-xs">Cancel</button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </td>
+          <td className="px-6 py-4 text-right">
+            {!editAmt ? (
+              <div className="flex items-center justify-end gap-2">
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-slate-900">${t.amount.toFixed(2)}</div>
+                  {t.originalAmount!==undefined && t.originalAmount!==t.amount && <div className="text-xs text-slate-500">Orig: ${t.originalAmount.toFixed(2)}</div>}
+                </div>
+                <button onClick={()=>{setEditAmt(true);setAmt(t.amount);}} className="text-slate-400 hover:text-slate-600"><EditIcon/></button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <input type="number" step="0.01" value={amt} onChange={e=>setAmt(e.target.value)} className="w-full text-sm text-right border border-slate-300 rounded px-2 py-1" autoFocus/>
+                <div className="flex gap-2 justify-end">
+                  <button onClick={()=>{onUpdateAmount(t.id,amt);setEditAmt(false);}} className="text-xs text-blue-600 hover:text-blue-800">Save</button>
+                  <button onClick={()=>{setEditAmt(false);setAmt(t.amount);}} className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                </div>
+              </div>
+            )}
+          </td>
+          <td className="px-6 py-4 text-center">
+            <div className="flex items-center justify-center gap-2">
+              <button onClick={()=>{if(editCat){onUpdateCategory(t.id,selCat,false,'');setEditCat(false);setShowRule(false);}else{onAccept(t.id);}}} className="text-green-600 hover:text-green-800" title="Accept"><CheckIcon/></button>
+              <button onClick={()=>setShowFlag(true)} className={`${t.flagged?'text-orange-600':'text-slate-400'} hover:text-orange-800`} title="Flag"><FlagIcon filled={t.flagged}/></button>
+              <button onClick={()=>onDelete(t.id)} className="text-red-500 hover:text-red-700" title="Delete"><XIcon/></button>
+            </div>
+            {showFlag && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={e=>{if(e.target===e.currentTarget)setShowFlag(false);}}>
+                <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                  <h3 className="text-lg font-semibold text-slate-900 mb-2">{t.flagged?'Edit Flag':'Flag Transaction'}</h3>
+                  <p className="text-sm text-slate-600 mb-4">Add a note (optional)</p>
+                  <textarea value={flagNote} onChange={e=>setFlagNote(e.target.value)} placeholder="e.g., waiting on refund, ask husband, disputed charge"
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 mb-4" rows="3" autoFocus/>
+                  <div className="flex gap-3 justify-end">
+                    {t.flagged && <button onClick={()=>{onFlag(t.id,'');setFlagNote('');setShowFlag(false);}} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 font-medium">Remove Flag</button>}
+                    <button onClick={()=>setShowFlag(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 font-medium">Cancel</button>
+                    <button onClick={()=>{onFlag(t.id,flagNote);setShowFlag(false);}} className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium">{t.flagged?'Update':'Flag'}</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </td>
+        </tr>
+      );
+    };
+
+    // Main App
+    const ExpenseTracker = ({ user, onLogout }) => {
+      const [transactions, setTransactions] = useState([]);
+      const [rules, setRules] = useState({});
+      const [isLoading, setIsLoading] = useState(true);
+      const [isProcessing, setIsProcessing] = useState(false);
+      const [msg, setMsg] = useState('');
+      const [view, setView] = useState('transactions');
+      const [sortOrder, setSortOrder] = useState('desc');
+      const [filterCat, setFilterCat] = useState('all');
+      const [filterCard, setFilterCard] = useState('all');
+      const [filterMonth, setFilterMonth] = useState('all');
+      const [filterYear, setFilterYear] = useState('all');
+      const [filterStatus, setFilterStatus] = useState('all');
+      const [selected, setSelected] = useState(new Set());
+      const [curMonth, setCurMonth] = useState('');
+      const [curYear, setCurYear] = useState('');
+      const [cmpMonth, setCmpMonth] = useState('');
+      const [cmpYear, setCmpYear] = useState('');
+      const [confirmDlg, setConfirmDlg] = useState({show:false,message:'',onConfirm:null,confirmText:'Confirm',isDanger:true});
+      const [cardDlg, setCardDlg] = useState({show:false,csvData:null,bankType:null});
+      const [showAdd, setShowAdd] = useState(false);
+      const [addErr, setAddErr] = useState('');
+
+      const CATS = ['Groceries','Food & Drink','Gas/Auto','Shopping','Subscriptions','Personal Care & Beauty','Cat','Home','Mortgage & Utilities','Public Transportation','Golf','Running','Gym','Health','Travel','Other'];
+      const CARDS = ['Checking','Venture X','Flex','CSP','Prime','BOA','Venmo','Target','Discover'];
+      const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+      const showMsg = (m, ms=5000) => { setMsg(m); setTimeout(()=>setMsg(''), ms); };
+
+      // Load data
+      useEffect(() => {
+        const load = async () => {
+          try {
+            const [tx, rl] = await Promise.all([
+              sb.from('transactions').select('*').eq('user_id', user.id),
+              sb.from('rules').select('*').eq('user_id', user.id)
+            ]);
+            if (tx.error) throw tx.error;
+            if (rl.error) throw rl.error;
+            setTransactions(sortByDate(tx.data.map(fromDb)));
+            const ro = {}; rl.data.forEach(r=>ro[r.merchant]=r.category); setRules(ro);
+          } catch(e) { showMsg('❌ Failed to load: '+e.message); }
+          finally { setIsLoading(false); }
+        };
+        load();
+      }, [user.id]);
+
+      // Monthly totals
+      const monthlyTotals = (() => {
+        const t = {};
+        transactions.forEach(tx => {
+          let year, month;
+          if (tx.date.includes('/')) { const p=tx.date.split('/'); month=p[0].padStart(2,'0'); year=p[2]?.length===2?'20'+p[2]:p[2]; }
+          else { const p=tx.date.substring(0,7).split('-'); year=p[0]; month=p[1]; }
+          const k=`${year}-${month}`;
+          if (!t[k]) t[k]={byCategory:{},byCard:{},total:0,year,month};
+          t[k].byCategory[tx.category]=(t[k].byCategory[tx.category]||0)+tx.amount;
+          t[k].byCard[tx.card]=(t[k].byCard[tx.card]||0)+tx.amount;
+          t[k].total+=tx.amount;
+        });
+        return t;
+      })();
+      const months = Object.keys(monthlyTotals).sort().reverse();
+
+      useEffect(() => {
+        if (months.length > 0) {
+          const ck=`${curYear}-${curMonth}`;
+          if (!curMonth||!curYear||!monthlyTotals[ck]) { const [y,m]=months[0].split('-'); setCurMonth(m); setCurYear(y); }
+          if (!cmpMonth||!cmpYear) { const src=months.length>1?months[1]:months[0]; const [y,m]=src.split('-'); setCmpMonth(m); setCmpYear(y); }
+        }
+      }, [months.length, months[0], months[1]]);
+
+      const formatDate = (d) => {
+        if (!d) return '';
+        if (d.includes('/')) { const [m,day,y]=d.split('/'); return `${m}/${day}/${y?.length===2?'20'+y:y}`; }
+        const [y,m,day]=d.split('-'); return `${m}/${day}/${y}`;
+      };
+
+      const applyRules = useCallback((desc) => {
+        for (const [m,c] of Object.entries(rules)) { if (desc.toLowerCase().includes(m.toLowerCase())) return c; }
+        return null;
+      }, [rules]);
+
+      const catWithAI = async (desc, bankCat) => {
+        try {
+          const r = await fetch("https://api.anthropic.com/v1/messages", {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:100,
+              messages:[{role:"user",content:`Categorize: "${desc}" (bank: "${bankCat}") into ONE of: ${CATS.join(', ')}. Reply ONLY the category.`}]})
+          });
+          const d=await r.json(); const c=d.content[0].text.trim(); return CATS.includes(c)?c:'Other';
+        } catch { return 'Other'; }
+      };
+
+      const extractMerchant = async (desc) => {
+        try {
+          const r = await fetch("https://api.anthropic.com/v1/messages", {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:50,
+              messages:[{role:"user",content:`Extract merchant name from: "${desc}". Reply ONLY the name. Examples: "TST* KIIN THAI"→"KIIN", "AMAZON.COM*AB3"→"AMAZON"`}]})
+          });
+          const d=await r.json(); return d.content[0].text.trim();
+        } catch { return desc.split(' ')[0]; }
+      };
+
+      // CSV parsing
+      const parseCSV = (text) => {
+        const lines=text.trim().split('\n');
+        const headers=lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
+        return lines.slice(1).map(line=>{
+          const vals=line.split(',').map(v=>v.trim().replace(/"/g,''));
+          const o={}; headers.forEach((h,i)=>o[h]=vals[i]||''); return o;
+        }).filter(r=>Object.values(r).some(v=>v));
+      };
+
+      const normalize = (row, bankType, cardName) => {
+        const t={id:Math.random().toString(36).substr(2,9),source:bankType,rawData:row};
+        if (bankType==='Chase') {
+          t.date=row['Post Date'];
+          t.description=(row['Memo']&&row['Memo'].trim())?row['Memo'].trim():row['Description'];
+          t.amount=Math.abs(parseFloat(row['Amount'])); t.bankCategory=row['Category']; t.card=cardName||'Chase';
+          if (parseFloat(row['Amount'])>0||row['Type']?.toLowerCase()==='payment') return null;
+        } else if (bankType==='Capital One') {
+          t.date=row['Posted Date'];
+          t.description=`${row['Description']} (Card ${row['Card No.']})`;
+          const deb=parseFloat(row['Debit'])||0, cred=parseFloat(row['Credit'])||0;
+          t.amount=deb||cred; t.bankCategory=row['Category']; t.card=cardName||`Capital One ${row['Card No.']}`;
+          const d=row['Description'].toLowerCase();
+          if (row['Category']?.toLowerCase().includes('payment')||row['Category']?.toLowerCase().includes('credit')||
+              cred>0||d.includes('autopay')||d.includes('payment')||d.includes('pymt')) return null;
+        } else if (bankType==='Capital One 360') {
+          t.date=row['Transaction Date']; t.description=row['Transaction Description'];
+          t.amount=Math.abs(parseFloat(row['Transaction Amount'])); t.bankCategory='Checking'; t.card=cardName||'Capital One 360';
+          const d=row['Transaction Description'].toLowerCase();
+          if (row['Transaction Type']==='Credit') return null;
+          const pkw=['repayment','crcardpmt','autopay','online pmt','mobile pmt'];
+          const bns=['capital one','chase','wells fargo','wf','bank of america','citi','bilt','affirm'];
+          for (const k of pkw) { if (d.includes(k)) return null; }
+          if (d.includes('payment')&&bns.some(b=>d.includes(b))) return null;
+          if (d.includes('card')&&bns.some(b=>d.includes(b))) return null;
+        } else if (bankType==='Discover') {
+          t.date=row['Post Date']; t.description=row['Description'];
+          t.amount=parseFloat(row['Amount']); t.bankCategory=row['Category']; t.card=cardName||'Discover';
+        } else if (bankType==='Bank of America') {
+          t.date=row['Posted Date']; t.description=row['Payee'];
+          const a=parseFloat(row['Amount']); t.amount=Math.abs(a); t.bankCategory='Credit Card'; t.card=cardName||'Bank of America';
+          if (a>0) return null;
+          const d=row['Payee'].toLowerCase();
+          if (d.includes('ba electronic payment')||(d.includes('payment')&&(d.includes('bank of america')||d.includes('boa')))) return null;
+        } else if (bankType==='Target') {
+          t.date=row['Transaction Date']; t.description=row['Description'];
+          t.amount=parseFloat(row['Amount']); t.bankCategory='Retail'; t.card=cardName||'Target';
+          if (row['Transaction Type']==='Payment'||parseFloat(row['Amount'])<0) return null;
+          if (row['Transaction Type']!=='Sale') return null;
+        } else if (bankType==='Venmo') {
+          t.date=row['Transaction Date']; t.description=row['Description'];
+          t.amount=parseFloat(row['Amount']); t.bankCategory='Credit Card'; t.card=cardName||'Venmo';
+        }
+        return t;
+      };
+
+      // PDF upload
+      const handlePDF = async (file) => {
+        setIsProcessing(true);
+        try {
+          if (!window.pdfjsLib) {
+            await new Promise((res,rej)=>{
+              const s=document.createElement('script');
+              s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+              s.onload=()=>{window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';res();};
+              s.onerror=()=>rej(new Error('Failed to load PDF.js')); document.head.appendChild(s);
+            });
+          }
+          const pdf=await window.pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+          let items=[];
+          for (let i=1;i<=pdf.numPages;i++) {
+            const page=await pdf.getPage(i); const tc=await page.getTextContent();
+            tc.items.forEach(it=>items.push({text:it.str,x:it.transform[4],y:it.transform[5],page:i}));
+          }
+          items.sort((a,b)=>{
+            if (a.page!==b.page) return a.page-b.page;
+            if (Math.abs(a.y-b.y)>2) return b.y-a.y;
+            return a.x-b.x;
+          });
+          const rows=[]; let cur=[],lastY=null;
+          items.forEach(it=>{
+            if (lastY===null||Math.abs(it.y-lastY)<=2){cur.push(it.text);lastY=it.y;}
+            else{if(cur.length>0)rows.push(cur.join(' '));cur=[it.text];lastY=it.y;}
+          });
+          if (cur.length>0) rows.push(cur.join(' '));
+          const fullText=rows.join('\n');
+          const parsed=parseVenmo(fullText);
+          if (parsed.length===0){showMsg('❌ No transactions found in PDF.',10000);setIsProcessing(false);return;}
+          setCardDlg({show:true,csvData:{rows:parsed,bankType:'Venmo'},bankType:'Venmo'});
+        } catch(e){showMsg('❌ PDF error: '+e.message,10000);setIsProcessing(false);}
+      };
+
+      const parseVenmo = (text) => {
+        const result=[];
+        const cm=text.match(/billing cycle from\s+\d{2}\/\d{2}\/\d{4}\s+to\s+(\d{2})\/(\d{2})\/(\d{4})/i);
+        const sy=cm?parseInt(cm[3]):new Date().getFullYear();
+        const sm=cm?parseInt(cm[1]):new Date().getMonth()+1;
+        console.log('Statement end date:',cm?`${cm[1]}/${cm[2]}/${cm[3]}`:'not found');
+        let inSec=false;
+        for (const line of text.split('\n')) {
+          const l=line.trim();
+          if (l.includes('Purchases and other debits')){inSec=true;continue;}
+          if (l.includes('Total fees charged')||l.includes('Total interest charged')){inSec=false;break;}
+          if (!inSec||!l) continue;
+          if (l.includes('AUTOPAYMENT')||l.includes('Card Number Ending In')||l.includes('Jianxiao Liu')||l.toLowerCase().includes('total')||l.match(/^[\$\-][\d,]+\.\d{2}$/)) continue;
+          const m=l.match(/^(\d{1,2})\/(\d{1,2})\s+([A-Z0-9]+)\s+(.+?)\s+\$?([\d,]+\.\d{2})$/);
+          if (m) {
+            const [,month,day,,description,amount]=m;
+            const txM=parseInt(month); const year=txM>sm?sy-1:sy;
+            result.push({'Transaction Date':`${month.padStart(2,'0')}/${day.padStart(2,'0')}/${year}`,'Description':description.trim().replace(/\s+/g,' '),'Amount':amount.replace(/,/g,'')});
+            console.log(`Parsed: ${month}/${day}/${year} - ${description} - $${amount}`);
+          }
+        }
+        console.log(`Total: ${result.length}`);
+        return result;
+      };
+
+      const handleFileUpload = async (e) => {
+        const file=e.target.files[0]; if (!file) return;
+        if (file.name.toLowerCase().endsWith('.pdf')){await handlePDF(file);e.target.value='';return;}
+        const rows=parseCSV(await file.text());
+        if (!rows.length){showMsg('❌ Empty or unreadable file.');return;}
+        const h=Object.keys(rows[0]); let bank='';
+        if (h.includes('Type')&&h.includes('Memo')) bank='Chase';
+        else if (h.includes('Card No.')&&h.includes('Debit')) bank='Capital One';
+        else if (h.includes('Transaction Type')&&h.includes('Transaction Amount')) bank='Capital One 360';
+        else if (h.includes('Trans. Date')&&h.includes('Post Date')&&h.includes('Category')) bank='Discover';
+        else if (h.includes('Reference Number')&&h.includes('Payee')) bank='Bank of America';
+        else if (h.includes('Transaction Date')&&h.includes('Posting Date')&&h.includes('Transaction Type')) bank='Target';
+        if (bank) setCardDlg({show:true,csvData:{rows,bankType:bank},bankType:bank});
+        else showMsg('❌ Unrecognized file format.');
+        e.target.value='';
+      };
+
+      const processCSV = async (rows, bankType, cardName) => {
+        setIsProcessing(true);
+        const newTx=[]; let dupes=0;
+        for (const row of rows) {
+          const n=normalize(row,bankType,cardName); if (!n) continue;
+          const isDupe=transactions.some(t=>t.date===n.date&&t.description===n.description&&Math.abs(t.amount-n.amount)<0.01&&t.card===n.card);
+          if (isDupe){dupes++;continue;}
+          let cat=applyRules(n.description);
+          if (!cat) cat=await catWithAI(n.description, n.bankCategory||'');
+          n.category=cat; n.needsReview=true; n.flagged=false; n.flagNote='';
+          newTx.push(n);
+        }
+        if (newTx.length>0) {
+          try {
+            const {error}=await sb.from('transactions').insert(newTx.map(t=>toDb(t,user.id)));
+            if (error) throw error;
+            setTransactions(sortByDate([...transactions,...newTx]));
+            showMsg(`✅ Imported ${newTx.length} transactions${dupes>0?` (${dupes} dupes skipped)`:''}`);
+          } catch(e){showMsg('❌ Save failed: '+e.message);}
+        } else {
+          showMsg(`ℹ️ No new transactions.${dupes>0?` ${dupes} duplicates skipped.`:''}`);
+        }
+        setIsProcessing(false);
+      };
+
+      // CRUD
+      const updateCategory = async (id, newCat, saveAsRule, merchantName) => {
+        let updated=transactions.map(t=>t.id===id?{...t,category:newCat,needsReview:false}:t);
+        if (saveAsRule&&merchantName) {
+          const nr={...rules,[merchantName]:newCat}; setRules(nr);
+          try{await sb.from('rules').upsert({user_id:user.id,merchant:merchantName,category:newCat},{onConflict:'user_id,merchant'});}catch(e){console.error(e);}
+          const matching=updated.filter(t=>t.id!==id&&t.needsReview&&t.description.toLowerCase().includes(merchantName.toLowerCase()));
+          if (matching.length>0) {
+            setConfirmDlg({show:true,isDanger:false,confirmText:'Apply Rule',
+              message:`Found ${matching.length} other transaction${matching.length>1?'s':''} containing "${merchantName}".\n\nApply rule → "${newCat}"?`,
+              onConfirm:()=>{
+                const final=updated.map(t=>(t.needsReview&&t.description.toLowerCase().includes(merchantName.toLowerCase()))?{...t,category:newCat}:t);
+                setTransactions(final);
+                sb.from('transactions').update({category:newCat}).in('id',matching.map(t=>t.id)).then(({error})=>{if(error)console.error(error);});
+                setConfirmDlg({show:false,message:'',onConfirm:null,confirmText:'Confirm',isDanger:true});
+              }
+            });
+          }
+        }
+        setTransactions(updated);
+        try{await sb.from('transactions').update({category:newCat,needs_review:false}).eq('id',id);}catch(e){console.error(e);}
+      };
+
+      const updateDesc = async (id, d) => {
+        setTransactions(transactions.map(t=>t.id===id?{...t,description:d}:t));
+        try{await sb.from('transactions').update({description:d}).eq('id',id);}catch(e){console.error(e);}
+      };
+
+      const updateAmt = async (id, a) => {
+        setTransactions(transactions.map(t=>{
+          if(t.id!==id) return t;
+          const orig=t.originalAmount!==undefined?t.originalAmount:t.amount;
+          return {...t,amount:parseFloat(a),originalAmount:orig};
+        }));
+        const tx=transactions.find(t=>t.id===id);
+        const orig=tx.originalAmount!==undefined?tx.originalAmount:tx.amount;
+        try{await sb.from('transactions').update({amount:parseFloat(a),original_amount:orig}).eq('id',id);}catch(e){console.error(e);}
+      };
+
+      const deleteTx = (id) => setConfirmDlg({show:true,message:'Delete this transaction?',confirmText:'Delete',isDanger:true,
+        onConfirm:async()=>{
+          setTransactions(transactions.filter(t=>t.id!==id));
+          try{await sb.from('transactions').delete().eq('id',id);}catch(e){console.error(e);}
+          setConfirmDlg({show:false,message:'',onConfirm:null,confirmText:'Confirm',isDanger:true});
+        }});
+
+      const acceptTx = async (id) => {
+        setTransactions(transactions.map(t=>t.id===id?{...t,needsReview:false}:t));
+        try{await sb.from('transactions').update({needs_review:false}).eq('id',id);}catch(e){console.error(e);}
+      };
+
+      const flagTx = async (id, note) => {
+        const tx=transactions.find(t=>t.id===id); const nf=!tx.flagged;
+        setTransactions(transactions.map(t=>t.id===id?{...t,flagged:nf,flagNote:note||t.flagNote,needsReview:nf?false:t.needsReview}:t));
+        try{await sb.from('transactions').update({flagged:nf,flag_note:note||tx.flagNote||'',needs_review:nf?false:tx.needsReview}).eq('id',id);}catch(e){console.error(e);}
+      };
+
+      const addManual = async (data) => {
+        const t={id:Math.random().toString(36).substr(2,9),date:data.date,description:data.description,amount:parseFloat(data.amount),category:data.category,card:data.card,needsReview:false,flagged:false,flagNote:'',source:'Manual Entry'};
+        setTransactions(sortByDate([t,...transactions]));
+        try{const {error}=await sb.from('transactions').insert(toDb(t,user.id));if(error)throw error;}catch(e){showMsg('❌ Save failed: '+e.message);}
+      };
+
+      const bulkAccept = async () => {
+        const ids=[...selected];
+        setTransactions(transactions.map(t=>ids.includes(t.id)?{...t,needsReview:false}:t)); setSelected(new Set());
+        try{await sb.from('transactions').update({needs_review:false}).in('id',ids);}catch(e){console.error(e);}
+      };
+
+      const bulkFlag = async () => {
+        const ids=[...selected];
+        setTransactions(transactions.map(t=>ids.includes(t.id)?{...t,flagged:true,needsReview:false}:t)); setSelected(new Set());
+        try{await sb.from('transactions').update({flagged:true,needs_review:false}).in('id',ids);}catch(e){console.error(e);}
+      };
+
+      const bulkDelete = () => {
+        const ids=[...selected];
+        setConfirmDlg({show:true,message:`Delete ${ids.length} transactions?`,confirmText:'Delete',isDanger:true,
+          onConfirm:async()=>{
+            setTransactions(transactions.filter(t=>!ids.includes(t.id))); setSelected(new Set());
+            try{await sb.from('transactions').delete().in('id',ids);}catch(e){console.error(e);}
+            setConfirmDlg({show:false,message:'',onConfirm:null,confirmText:'Confirm',isDanger:true});
+          }});
+      };
+
+      const confirmAll = async () => {
+        const ids=filtered.filter(t=>t.needsReview).map(t=>t.id); const s=new Set(ids);
+        setTransactions(transactions.map(t=>s.has(t.id)?{...t,needsReview:false}:t));
+        try{await sb.from('transactions').update({needs_review:false}).in('id',ids);}catch(e){console.error(e);}
+      };
+
+      const clearAll = () => setConfirmDlg({show:true,message:'⚠️ DELETE ALL DATA?\n\nThis permanently deletes all transactions and rules.\n\nThis cannot be undone!',confirmText:'Delete All',isDanger:true,
+        onConfirm:async()=>{
+          try{await Promise.all([sb.from('transactions').delete().eq('user_id',user.id),sb.from('rules').delete().eq('user_id',user.id)]);}catch(e){showMsg('❌ Error: '+e.message);}
+          setTransactions([]); setRules({});
+          setConfirmDlg({show:false,message:'',onConfirm:null,confirmText:'Confirm',isDanger:true});
+        }});
+
+      const deleteRule = async (merchant) => {
+        const nr={...rules}; delete nr[merchant]; setRules(nr);
+        try{await sb.from('rules').delete().eq('user_id',user.id).eq('merchant',merchant);}catch(e){console.error(e);}
+      };
+
+      const exportData = () => {
+        const str=JSON.stringify({transactions,rules},null,2);
+        const url=URL.createObjectURL(new Blob([str],{type:'application/json'}));
+        const a=document.createElement('a'); a.href=url;
+        const n=new Date(); a.download=`expense-data-${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}.json`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      };
+
+      const importData = async (e) => {
+        const file=e.target.files[0]; if (!file) return;
+        const reader=new FileReader();
+        reader.onload=async(ev)=>{
+          try {
+            const data=JSON.parse(ev.target.result);
+            const migrated=(data.transactions||[]).map(t=>({...t,needsReview:t.needsReview!==undefined?t.needsReview:false,flagged:t.flagged||false,flagNote:t.flagNote||'',source:t.source||'Imported'}));
+            if (migrated.length>0){const {error}=await sb.from('transactions').upsert(migrated.map(t=>toDb(t,user.id)),{onConflict:'id'});if(error)throw error;}
+            if (data.rules){
+              const rr=Object.entries(data.rules).map(([m,c])=>({user_id:user.id,merchant:m,category:c}));
+              if (rr.length>0){const {error}=await sb.from('rules').upsert(rr,{onConflict:'user_id,merchant'});if(error)throw error;}
+              setRules(data.rules);
+            }
+            setTransactions(sortByDate(migrated));
+            showMsg(`✅ Imported ${migrated.length} transactions and ${Object.keys(data.rules||{}).length} rules!`);
+          } catch(err){showMsg('❌ Import failed: '+err.message);}
+        };
+        reader.readAsText(file); e.target.value='';
+      };
+
+      // Derived data
+      const uniqueCards=[...new Set(transactions.map(t=>t.card))];
+      const uniqueYears=[...new Set(transactions.map(t=>{if(t.date.includes('/')){const y=t.date.split('/')[2];return y?.length===2?'20'+y:y;}return t.date.split('-')[0];}))].sort().reverse();
+      const uniqueMonths=[...new Set(transactions.map(t=>{if(t.date.includes('/'))return t.date.split('/')[0].padStart(2,'0');return t.date.split('-')[1];}))].sort((a,b)=>parseInt(a)-parseInt(b));
+
+      const filtered = (() => {
+        let f=[...transactions];
+        if (filterCat!=='all') f=f.filter(t=>t.category===filterCat);
+        if (filterCard!=='all') f=f.filter(t=>t.card===filterCard);
+        if (filterStatus==='needsReview') f=f.filter(t=>t.needsReview);
+        else if (filterStatus==='flagged') f=f.filter(t=>t.flagged);
+        else if (filterStatus==='accepted') f=f.filter(t=>!t.needsReview&&!t.flagged);
+        if (filterMonth!=='all'||filterYear!=='all') {
+          f=f.filter(t=>{
+            let month,year;
+            if (t.date.includes('/')){const p=t.date.split('/');month=p[0].padStart(2,'0');year=p[2]?.length===2?'20'+p[2]:p[2];}
+            else{const p=t.date.split('-');year=p[0];month=p[1];}
+            if (filterMonth!=='all'&&filterYear!=='all') return month===filterMonth&&year===filterYear;
+            if (filterMonth!=='all') return month===filterMonth;
+            if (filterYear!=='all') return year===filterYear;
+            return true;
+          });
+        }
+        return sortByDate(f,sortOrder);
+      })();
+
+      if (isLoading) return (
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center"><div className="text-5xl mb-4">💰</div><p className="text-slate-600 text-lg">Loading your data...</p></div>
+        </div>
+      );
+
+      const ck=`${curYear}-${curMonth}`, cmpk=`${cmpYear}-${cmpMonth}`;
+      const curData=monthlyTotals[ck], cmpData=monthlyTotals[cmpk];
+      const availMonths=months.map(k=>{const[y,m]=k.split('-');return{key:k,display:`${MN[parseInt(m)-1]} ${y}`};});
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
+          <div className="max-w-6xl mx-auto">
+            {/* Header */}
+            <div className="mb-8 flex justify-between items-start">
+              <div>
+                <h1 className="text-4xl font-bold text-slate-900 mb-1">Expense Tracker</h1>
+                <p className="text-slate-500 text-sm">Signed in as {user.email}</p>
+              </div>
+              <button onClick={onLogout} className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:text-slate-900 hover:bg-white rounded-lg transition text-sm">
+                <LogoutIcon/> Sign out
+              </button>
+            </div>
+
+            {/* Nav */}
+            <div className="flex gap-4 mb-6 justify-between items-center flex-wrap">
+              <div className="flex gap-2 flex-wrap">
+                {[['transactions','Transactions'],['monthly','Monthly Overview'],['yearly','Yearly Overview'],['rules',`Rules (${Object.keys(rules).length})`]].map(([v,l])=>(
+                  <button key={v} onClick={()=>setView(v)} className={`px-4 py-2 rounded-lg font-medium transition ${view===v?'bg-blue-600 text-white':'bg-white text-slate-700 hover:bg-slate-50'}`}>{l}</button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={exportData} className="px-3 py-2 rounded-lg font-medium bg-green-100 text-green-700 hover:bg-green-200 transition flex items-center gap-2 text-sm"><DownloadIcon/>Export</button>
+                <button onClick={()=>document.getElementById('importJson').click()} className="px-3 py-2 rounded-lg font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition flex items-center gap-2 text-sm"><UploadIcon/>Import Backup</button>
+                <input id="importJson" type="file" accept=".json" onChange={importData} style={{display:'none'}}/>
+                <button onClick={clearAll} className="px-3 py-2 rounded-lg font-medium bg-red-100 text-red-700 hover:bg-red-200 transition flex items-center gap-2 text-sm"><TrashIcon/>Clear All</button>
+              </div>
+            </div>
+
+            {/* Message */}
+            {msg && <div className={`mb-4 p-4 rounded-lg font-medium text-sm ${msg.includes('✅')?'bg-green-50 text-green-800 border border-green-200':msg.includes('ℹ️')?'bg-blue-50 text-blue-800 border border-blue-200':'bg-red-50 text-red-800 border border-red-200'}`}>{msg}</div>}
+
+            {/* Upload */}
+            {view==='transactions' && (
+              <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+                <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg p-8 cursor-pointer hover:border-blue-500 transition">
+                  <BigUploadIcon/>
+                  <span className="text-lg font-medium text-slate-700 mb-1">{isProcessing?'Processing...':'Import CSV or PDF from Bank'}</span>
+                  <span className="text-sm text-slate-500">Chase, Capital One, Capital One 360, Discover, BOA, Target, Venmo (PDF)</span>
+                  <input type="file" accept=".csv,.pdf" onChange={handleFileUpload} className="hidden" disabled={isProcessing}/>
+                </label>
+              </div>
+            )}
+
+            {/* Transactions */}
+            {view==='transactions' && (
+              <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                <div className="p-6 border-b border-slate-200 bg-slate-50">
+                  <h3 className="text-sm font-medium text-slate-700 mb-3">Filters</h3>
+                  <div className="grid grid-cols-5 gap-4">
+                    {[
+                      ['Month',filterMonth,setFilterMonth,[['all','All Months'],...uniqueMonths.map(m=>[m,MN[parseInt(m)-1]])]],
+                      ['Year',filterYear,setFilterYear,[['all','All Years'],...uniqueYears.map(y=>[y,y])]],
+                      ['Category',filterCat,setFilterCat,[['all','All Categories'],...CATS.map(c=>[c,c])]],
+                      ['Card',filterCard,setFilterCard,[['all','All Cards'],...uniqueCards.map(c=>[c,c])]],
+                      ['Status',filterStatus,setFilterStatus,[['all','All Status'],['needsReview','Needs Review'],['flagged','Flagged'],['accepted','Accepted']]],
+                    ].map(([l,v,s,opts])=>(
+                      <div key={l}>
+                        <label className="block text-xs text-slate-600 mb-1">{l}</label>
+                        <select value={v} onChange={e=>s(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                          {opts.map(([ov,ol])=><option key={ov} value={ov}>{ol}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                  <h2 className="text-xl font-semibold text-slate-900">
+                    Transactions ({filtered.length})
+                    {filtered.filter(t=>t.needsReview).length>0&&<span className="ml-2 text-sm text-yellow-600">({filtered.filter(t=>t.needsReview).length} need review)</span>}
+                    {filtered.filter(t=>t.flagged).length>0&&<span className="ml-2 text-sm text-orange-600">({filtered.filter(t=>t.flagged).length} flagged)</span>}
+                  </h2>
+                  <div className="flex gap-2">
+                    {selected.size>0 ? (
+                      <>
+                        <span className="text-sm text-slate-600 px-3 py-2">{selected.size} selected</span>
+                        <button onClick={bulkAccept} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Accept Selected</button>
+                        <button onClick={bulkFlag} className="px-3 py-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 text-sm font-medium">Flag Selected</button>
+                        <button onClick={bulkDelete} className="px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 text-sm font-medium">Delete Selected</button>
+                      </>
+                    ) : (
+                      <div className="flex gap-2">
+                        {filtered.filter(t=>t.needsReview).length>0&&(
+                          <button onClick={confirmAll} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium flex items-center gap-2">
+                            <CheckIcon cls="w-4 h-4"/> Confirm Displayed ({filtered.filter(t=>t.needsReview).length})
+                          </button>
+                        )}
+                        <button onClick={()=>setShowAdd(true)} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">+ Add Transaction</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {filtered.length===0 ? (
+                  <div className="p-12 text-center text-slate-500">{transactions.length===0?'No transactions yet. Upload a CSV or PDF to get started.':'No transactions match the selected filters.'}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-4 py-3 text-center">
+                            <input type="checkbox" checked={selected.size===filtered.length&&filtered.length>0}
+                              onChange={()=>selected.size===filtered.length?setSelected(new Set()):setSelected(new Set(filtered.map(t=>t.id)))}
+                              className="w-4 h-4 rounded border-slate-300"/>
+                          </th>
+                          <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-100" onClick={()=>setSortOrder(s=>s==='desc'?'asc':'desc')}>
+                            Date {sortOrder==='desc'?'↓':'↑'}
+                          </th>
+                          <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700">Description</th>
+                          <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700">Card</th>
+                          <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700">Category</th>
+                          <th className="px-6 py-3 text-right text-sm font-semibold text-slate-700">Amount</th>
+                          <th className="px-6 py-3 text-center text-sm font-semibold text-slate-700">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filtered.map(t=>(
+                          <TransactionRow key={t.id} transaction={t} categories={CATS}
+                            onUpdateCategory={updateCategory} onUpdateDescription={updateDesc}
+                            onUpdateAmount={updateAmt} onDelete={deleteTx}
+                            onAccept={acceptTx} onFlag={flagTx}
+                            formatDate={formatDate} extractMerchant={extractMerchant}
+                            isSelected={selected.has(t.id)}
+                            onToggleSelect={(id)=>{const s=new Set(selected);s.has(id)?s.delete(id):s.add(id);setSelected(s);}}/>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Monthly Overview */}
+            {view==='monthly' && (
+              <div className="space-y-6">
+                {!curData ? (
+                  <div className="bg-white rounded-xl shadow-sm p-6 text-center text-slate-500">No transaction data available</div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="bg-white rounded-xl shadow-sm p-6">
+                      <div className="mb-4">
+                        <select value={ck} onChange={e=>{const[y,m]=e.target.value.split('-');setCurMonth(m);setCurYear(y);}} className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg font-semibold">
+                          {availMonths.map(({key,display})=><option key={key} value={key}>{display}</option>)}
+                        </select>
+                      </div>
+                      <div className="text-xl font-bold text-slate-900 mb-4">${curData.total.toFixed(2)}</div>
+                      <div className="space-y-2">
+                        {CATS.map(cat=>{
+                          const curr=curData.byCategory[cat]||0, comp=cmpData?(cmpData.byCategory[cat]||0):0, diff=curr-comp;
+                          return (
+                            <div key={cat} className="flex justify-between items-center py-1">
+                              <span className="text-sm text-slate-700">{cat}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-slate-900">${curr.toFixed(2)}</span>
+                                {cmpData&&diff!==0&&<span className={`text-xs font-medium ${diff>0?'text-red-600':'text-green-600'}`}>{diff>0?'↑':'↓'} ${Math.abs(diff).toFixed(2)}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="bg-white rounded-xl shadow-sm p-6">
+                      <div className="mb-4">
+                        <select value={cmpk||(months.length>1?months[1]:months[0])} onChange={e=>{const[y,m]=e.target.value.split('-');setCmpMonth(m);setCmpYear(y);}} className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg font-semibold">
+                          {availMonths.map(({key,display})=><option key={key} value={key}>{display}</option>)}
+                        </select>
+                      </div>
+                      {cmpData ? (
+                        <>
+                          <div className="text-xl font-bold text-slate-900 mb-4">${cmpData.total.toFixed(2)}</div>
+                          <div className="space-y-2">
+                            {CATS.map(cat=>(
+                              <div key={cat} className="flex justify-between items-center py-1">
+                                <span className="text-sm text-slate-700">{cat}</span>
+                                <span className="text-sm font-semibold text-slate-900">${(cmpData.byCategory[cat]||0).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      ) : <div className="text-center py-8 text-slate-500">No data for selected month</div>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Yearly Overview */}
+            {view==='yearly' && (
+              <div className="space-y-6">
+                {(() => {
+                  const dy=curYear||new Date().getFullYear().toString();
+                  let ytd=0; const ytdCat={}; const mdata={};
+                  CATS.forEach(c=>ytdCat[c]=0);
+                  for(let i=1;i<=12;i++) mdata[`${dy}-${String(i).padStart(2,'0')}`]=0;
+                  Object.keys(monthlyTotals).forEach(k=>{
+                    const[y]=k.split('-'); if(y!==dy) return;
+                    const d=monthlyTotals[k]; mdata[k]=d.total; ytd+=d.total;
+                    Object.entries(d.byCategory).forEach(([c,a])=>{ytdCat[c]=(ytdCat[c]||0)+a;});
+                  });
+                  return (
+                    <>
+                      <div className="bg-white rounded-xl shadow-sm p-6">
+                        <div className="flex items-center gap-4 mb-2">
+                          <h3 className="text-lg font-semibold text-slate-900">{dy} Year-to-Date</h3>
+                          {uniqueYears.length>1&&<select value={dy} onChange={e=>setCurYear(e.target.value)} className="px-3 py-1 border border-slate-300 rounded-lg text-sm">
+                            {uniqueYears.map(y=><option key={y} value={y}>{y}</option>)}
+                          </select>}
+                        </div>
+                        <div className="text-3xl font-bold text-slate-900">${ytd.toFixed(2)}</div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-6">
+                        <div className="bg-white rounded-xl shadow-sm p-6">
+                          <h3 className="text-lg font-semibold text-slate-900 mb-4">Monthly Totals</h3>
+                          <div className="space-y-3">
+                            {MN.map((name,idx)=>{
+                              const k=`${dy}-${String(idx+1).padStart(2,'0')}`;
+                              return <div key={k} className="flex justify-between"><span className="text-sm text-slate-700">{name} {dy}</span><span className="text-sm font-semibold text-slate-900">${(mdata[k]||0).toFixed(2)}</span></div>;
+                            })}
+                          </div>
+                        </div>
+                        <div className="bg-white rounded-xl shadow-sm p-6">
+                          <h3 className="text-lg font-semibold text-slate-900 mb-4">By Category (YTD)</h3>
+                          <div className="space-y-3">
+                            {CATS.map(cat=>{
+                              const a=ytdCat[cat]||0, pct=ytd>0?(a/ytd*100):0;
+                              return <div key={cat} className="flex justify-between"><span className="text-sm text-slate-700">{cat}</span><div><span className="text-sm font-semibold text-slate-900">${a.toFixed(2)}</span>{a>0&&<span className="ml-2 text-xs text-slate-500">({pct.toFixed(1)}%)</span>}</div></div>;
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* Rules */}
+            {view==='rules' && (
+              <div className="bg-white rounded-xl shadow-sm p-6">
+                <h2 className="text-xl font-semibold text-slate-900 mb-2">Categorization Rules</h2>
+                <p className="text-sm text-slate-600 mb-6">Rules match if the transaction description CONTAINS the keyword (case-insensitive). New imports always require review.</p>
+                {Object.keys(rules).length===0 ? (
+                  <div className="text-center py-8 text-slate-500">No rules yet. Edit a category in the Transactions view to create rules.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {Object.entries(rules).map(([merchant,cat])=>(
+                      <div key={merchant} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
+                        <div><span className="font-medium text-slate-900">{merchant}</span><span className="text-slate-500 mx-2">→</span><span className="text-blue-600">{cat}</span></div>
+                        <button onClick={()=>deleteRule(merchant)} className="text-red-500 hover:text-red-700"><XIcon/></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Confirm Modal */}
+          {confirmDlg.show && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                <p className="text-slate-900 whitespace-pre-line mb-6">{confirmDlg.message}</p>
+                <div className="flex gap-3 justify-end">
+                  <button onClick={()=>setConfirmDlg({show:false,message:'',onConfirm:null,confirmText:'Confirm',isDanger:true})} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 font-medium">Cancel</button>
+                  <button onClick={confirmDlg.onConfirm} className={`px-4 py-2 text-white rounded-lg font-medium ${confirmDlg.isDanger?'bg-red-600 hover:bg-red-700':'bg-green-600 hover:bg-green-700'}`}>{confirmDlg.confirmText}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Card Modal */}
+          {cardDlg.show && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                <h3 className="text-lg font-semibold text-slate-900 mb-2">Select Card/Account</h3>
+                <p className="text-sm text-slate-600 mb-4">Detected format: <strong>{cardDlg.bankType}</strong>. Choose which card this file belongs to.</p>
+                <select id="cardSel" className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 mb-4" defaultValue="">
+                  <option value="" disabled>Select a card...</option>
+                  {CARDS.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+                <div className="flex gap-3 justify-end">
+                  <button onClick={()=>{setCardDlg({show:false,csvData:null,bankType:null});setIsProcessing(false);}} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 font-medium">Cancel</button>
+                  <button onClick={()=>{const c=document.getElementById('cardSel').value;if(c){processCSV(cardDlg.csvData.rows,cardDlg.csvData.bankType,c);setCardDlg({show:false,csvData:null,bankType:null});}}} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Import</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Add Transaction Modal */}
+          {showAdd && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                <h3 className="text-lg font-semibold text-slate-900 mb-4">Add Transaction</h3>
+                {addErr && <div className="mb-4 p-3 bg-red-50 text-red-800 border border-red-200 rounded-lg text-sm">{addErr}</div>}
+                <div className="space-y-4">
+                  <div><label className="block text-sm font-medium text-slate-700 mb-1">Date</label><input id="mDate" type="text" placeholder="02/14/2026" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"/></div>
+                  <div><label className="block text-sm font-medium text-slate-700 mb-1">Description</label><input id="mDesc" type="text" placeholder="Cash purchase, Venmo, etc." className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"/></div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Card/Account</label>
+                    <select id="mCard" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                      <option value="">Select card...</option>
+                      {CARDS.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
+                    <select id="mCat" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                      <option value="">Select category...</option>
+                      {CATS.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div><label className="block text-sm font-medium text-slate-700 mb-1">Amount</label><input id="mAmt" type="number" step="0.01" min="0" placeholder="0.00" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"/></div>
+                </div>
+                <div className="flex gap-3 justify-end mt-6">
+                  <button type="button" onClick={()=>{setShowAdd(false);setAddErr('');}} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 font-medium">Cancel</button>
+                  <button type="button" onClick={()=>{
+                    setAddErr('');
+                    let date=document.getElementById('mDate').value;
+                    const description=document.getElementById('mDesc').value;
+                    const card=document.getElementById('mCard').value;
+                    const category=document.getElementById('mCat').value;
+                    const amount=document.getElementById('mAmt').value;
+                    if(!date||!description||!card||!category||!amount){setAddErr('Please fill in all fields');return;}
+                    const m=date.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+                    if(!m){setAddErr('Date must be MM/DD/YYYY (e.g., 02/14/2026)');return;}
+                    date=`${m[1].padStart(2,'0')}/${m[2].padStart(2,'0')}/${m[3]}`;
+                    addManual({date,description,card,category,amount});
+                    setShowAdd(false);setAddErr('');
+                  }} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Add Transaction</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // Root App
+    const App = () => {
+      const [user, setUser] = useState(null);
+      const [checking, setChecking] = useState(true);
+
+      useEffect(() => {
+        sb.auth.getSession().then(({data:{session}}) => {
+          setUser(session?.user??null); setChecking(false);
+        });
+        const {data:{subscription}} = sb.auth.onAuthStateChange((_,session) => {
+          setUser(session?.user??null);
+        });
+        return () => subscription.unsubscribe();
+      }, []);
+
+      const logout = async () => { await sb.auth.signOut(); setUser(null); };
+
+      if (checking) return (
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center"><div className="text-5xl mb-4">💰</div><p className="text-slate-600">Loading...</p></div>
+        </div>
+      );
+
+      return user ? <ExpenseTracker user={user} onLogout={logout}/> : <LoginPage onLogin={setUser}/>;
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>
